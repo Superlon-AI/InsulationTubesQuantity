@@ -6,11 +6,11 @@ function App() {
   const [history, setHistory] = useState([]);     // 记录历史，用于撤销
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [markerSize, setMarkerSize] = useState(13); // 新增：圈圈半径大小状态 (默认13，直径26px，比以前更大)
+  const [markerSize, setMarkerSize] = useState(13); // 圈圈半径大小状态 (默认13，直径26px)
   
   const canvasRef = useRef(null);
 
-  // 1. 核心功能：前端压缩图片 (限制宽度 640px)
+  // 1. 前端压缩图片 (限制宽度 640px，极度节省 Render 运行内存)
   const compressImage = (file) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -42,7 +42,7 @@ function App() {
     });
   };
 
-  // 2. 上传图片并调用后端
+  // 2. 上传图片并秒连 Render 后端
   const handleImageUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -54,29 +54,27 @@ function App() {
 
     try {
       const compressedBase64 = await compressImage(file);
-      setImageSrc(compressedBase64); // 将压缩后的图存入状态，准备画在 Canvas 上
+      setImageSrc(compressedBase64); // 将压缩后的图存入状态
 
-      const response = await fetch('/api/predict', {
+      // 🎯 核心改装：一箭穿心，直连新加坡 Render 节点
+      const response = await fetch('https://insulationtubesquantity.onrender.com/predict', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image: compressedBase64 }),
       });
 
-      let prediction = await response.json();
-      if (response.status !== 201) throw new Error(prediction.detail);
-
-      while (prediction.status !== 'succeeded' && prediction.status !== 'failed') {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        const statusResponse = await fetch(`/api/status?id=${prediction.id}`);
-        prediction = await statusResponse.json();
-        if (statusResponse.status !== 200) throw new Error(prediction.detail);
+      const prediction = await response.json();
+      
+      // FastAPI 成功返回状态码为 200
+      if (response.status !== 200) {
+        throw new Error(prediction.detail || 'Server internal error');
       }
 
+      // 🎯 告别轮询！Render 直接返回了终点结果，直接上屏画圈
       if (prediction.status === 'succeeded') {
-        // 后端现在返回的是坐标数组 [{x: 10, y: 20}, ...]
         setMarkers(prediction.output || []);
       } else {
-        throw new Error('AI 处理失败');
+        throw new Error('AI processing failed');
       }
     } catch (err) {
       setError(err.message);
@@ -85,7 +83,7 @@ function App() {
     }
   };
 
-  // 3. Canvas 绘画逻辑 (图片 + 圆点)
+  // 3. Canvas 视觉渲染逻辑 (图片 + 动态彩色圆点)
   useEffect(() => {
     if (!imageSrc || !canvasRef.current) return;
 
@@ -102,7 +100,7 @@ function App() {
       // 画底图
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-      // 定义每 20 个号码的颜色 (绿, 橙, 蓝, 蓝紫, 红)
+      // 每 20 个号码换一个颜色，便于车间清点
       const colors = ["#22c55e", "#f97316", "#3b82f6", "#8b5cf6", "#ef4444"];
 
       // 画坐标点
@@ -110,14 +108,14 @@ function App() {
         const color = colors[Math.floor(index / 20) % colors.length];
         
         ctx.beginPath();
-        ctx.arc(marker.x, marker.y, markerSize, 0, 2 * Math.PI); // 动态使用绑定的半径大小
+        ctx.arc(marker.x, marker.y, markerSize, 0, 2 * Math.PI); // 动态半径
         ctx.fillStyle = color;
         ctx.fill();
         ctx.lineWidth = 2;
         ctx.strokeStyle = "white";
         ctx.stroke();
 
-        // 画数字 (字号随着圈圈大小动态缩放，确保完美居中)
+        // 画数字 (字号随圈圈缩放，确保居中)
         ctx.fillStyle = "white";
         ctx.font = `bold ${Math.round(markerSize * 0.9)}px Arial`; 
         ctx.textAlign = "center";
@@ -125,28 +123,26 @@ function App() {
         ctx.fillText(index + 1, marker.x, marker.y);
       });
     };
-  }, [imageSrc, markers, markerSize]); // 新增：将 markerSize 放入监听数组，拉动时实时重绘Canvas
+  }, [imageSrc, markers, markerSize]);
 
-  // 4. 点击图片增删逻辑
+  // 4. 人工交互修正逻辑（点击手动增删保温管）
   const handleCanvasClick = (e) => {
     if (!canvasRef.current) return;
     
-    // 记录历史用于撤销
     setHistory([...history, [...markers]]);
 
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
     
-    // 计算真实的点击坐标 (处理 CSS 缩放的情况)
+    // 计算真实点击坐标
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
     const clickX = (e.clientX - rect.left) * scaleX;
     const clickY = (e.clientY - rect.top) * scaleY;
 
-    const hitRadius = Math.max(15, markerSize); // 点击判定的容错半径随着圈圈变大而自动变大
+    const hitRadius = Math.max(15, markerSize); 
     let hitIndex = -1;
 
-    // 检查是否点中了已有的管子
     for (let i = 0; i < markers.length; i++) {
       const dx = markers[i].x - clickX;
       const dy = markers[i].y - clickY;
@@ -158,17 +154,14 @@ function App() {
     }
 
     if (hitIndex !== -1) {
-      // 如果点中了，就删除它
       const newMarkers = [...markers];
       newMarkers.splice(hitIndex, 1);
       setMarkers(newMarkers);
     } else {
-      // If not hit, add a new one
       setMarkers([...markers, { x: clickX, y: clickY }]);
     }
   };
 
-  // 撤销功能
   const handleUndo = () => {
     if (history.length > 0) {
       const previousState = history[history.length - 1];
@@ -179,10 +172,9 @@ function App() {
 
   return (
     <div style={{ maxWidth: '800px', margin: '0 auto', padding: '20px', fontFamily: 'sans-serif' }}>
-      {/* 完全复刻的 UI 样式 */}
       <style>{`
         .superlon-header { font-family: 'Arial Black', sans-serif; font-style: italic; color: #0056b8; font-size: 3.5rem; text-align: center; margin-bottom: 0; line-height: 1;}
-        .superlon-reg { font-size: 1.5rem; vertical-align: top; margin-left: 8px; } /* 优化：拉开 ® 与 N 的间隙 */
+        .superlon-reg { font-size: 1.5rem; vertical-align: top; margin-left: 8px; }
         .header-divider { height: 1px; background-color: #e2e8f0; width: 60%; margin: 10px auto; }
         .subtitle { color: #0056b8; font-weight: bold; text-transform: uppercase; text-align: center; letter-spacing: 1px; }
         .metric-container { background-color: #ffffff; border: 1px solid #f1f5f9; border-radius: 16px; padding: 20px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); margin: 20px 0; text-align: center;}
@@ -191,17 +183,16 @@ function App() {
         .action-btn { padding: 10px 20px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; width: 100%; font-size: 1rem;}
         .btn-outline { background: white; border: 2px solid #e2e8f0; color: #64748b; }
         .btn-primary { background: #ef4444; color: white; }
-        .btn-upload { background: #0056b8; color: white; margin-bottom: 20px; display: block; text-align: center;}
       `}</style>
 
-      {/* 头部 */}
+      {/* SUPERLON 品牌头部 */}
       <div>
         <h1 className="superlon-header">SUPERLON<span className="superlon-reg">®</span></h1>
         <div className="header-divider"></div>
         <div className="subtitle">Insulation Tubes Count</div>
       </div>
 
-      {/* 上传区域 */}
+      {/* 上传交互控制区 */}
       <div style={{ marginTop: '30px' }}>
         <input 
           type="file" 
@@ -210,12 +201,11 @@ function App() {
           disabled={loading}
           style={{ display: 'block', margin: '0 auto' }}
         />
-        {/* 优化：修改为英文 Loading 提示 */}
         {loading && <p style={{ textAlign: 'center', color: '#0056b8', fontWeight: 'bold' }}>⚡ Analyzing image, please wait...</p>}
-        {error && <p style={{ textAlign: 'center', color: 'red' }}>错误: {error}</p>}
+        {error && <p style={{ textAlign: 'center', color: 'red', fontWeight: 'bold' }}>Error: {error}</p>}
       </div>
 
-      {/* 计数面板 */}
+      {/* 核心看板与数据反馈区 */}
       {imageSrc && !loading && (
         <>
           <div className="metric-container">
@@ -225,10 +215,10 @@ function App() {
 
           <div style={{ display: 'flex', gap: '20px', marginBottom: '20px' }}>
             <button className="action-btn btn-outline" onClick={handleUndo} disabled={history.length === 0}>
-              ↩ Undo Last (撤销)
+              ↩ Undo Last
             </button>
             <button className="action-btn btn-primary" onClick={() => { setHistory([...history, [...markers]]); setMarkers([]); }}>
-              🗑️ Clear All (清空)
+              🗑️ Clear All
             </button>
           </div>
 
@@ -236,13 +226,13 @@ function App() {
             👆 Tap image to add missing tubes or remove incorrect ones.
           </p>
 
-          {/* 优化：新增圈圈大小动态调节拉条（Slider） */}
+          {/* 圆圈大小动态调节 */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', marginBottom: '20px' }}>
             <span style={{ fontSize: '0.875rem', color: '#64748b', fontWeight: 'bold' }}>Dot Size:</span>
             <input 
               type="range" 
-              min="8"    // 允许缩到的最小半径
-              max="25"   // 允许放到的最大半径
+              min="8" 
+              max="25" 
               value={markerSize} 
               onChange={(e) => setMarkerSize(Number(e.target.value))}
               style={{ cursor: 'pointer', width: '150px' }}
@@ -250,7 +240,7 @@ function App() {
             <span style={{ fontSize: '0.875rem', color: '#64748b' }}>{markerSize * 2}px</span>
           </div>
 
-          {/* 交互式画板 */}
+          {/* 交互画布 */}
           <div style={{ display: 'flex', justifyContent: 'center', border: '2px solid #e2e8f0', borderRadius: '12px', overflow: 'hidden' }}>
             <canvas 
               ref={canvasRef}
