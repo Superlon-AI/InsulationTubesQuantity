@@ -1,22 +1,46 @@
-name: Push AI to Replicate
+name: Deploy React App to GitHub Pages
 
 on:
-  workflow_dispatch:  # 允许手动点击运行
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
 
 jobs:
   deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - name: 下载仓库小文件
+      - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: 自动下载大模型 best.pt
-        run: wget -O best.pt "https://github.com/Superlon-AI/InsulationTubesCount/releases/download/v1.0/best.pt"
-
-      - name: 安装打包引擎并登录
-        uses: replicate/setup-cog@v2
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          token: ${{ secrets.REPLICATE_API_TOKEN }}
+          node-version: 20
+          cache: npm
 
-      - name: 终极大发射！
-        run: cog push r8.im/superlon-ai/insulation-tube-counter
+      - name: Install Dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Build React Production Package
+        run: npm run build
+
+      - name: Upload Build Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./build
+
+      - name: Deploy to GitHub Pages Direct
+        id: deployment
+        uses: actions/deploy-pages@v4
